@@ -1,0 +1,29 @@
+# Ambiente e chaves
+.env
+.venv/
+env/
+venv/
+
+# Dependências e builds
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# Dados pessoais, banco de dados e arquivos locais
+data/
+*.db
+*.db-shm
+*.db-wal
+data/browser-profile/
+data/generated/
+data/resumes/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Sistema
+.DS_Store
+Thumbs.db
