@@ -139,7 +139,7 @@ export default function Profile({ notify }: any) {
 
       <section className="card">
         <h2>Traduzir perfil (opcional)</h2>
-        <p className="muted">Gera versões do resumo/descrições em outro idioma via API da Anthropic (requer <code>ANTHROPIC_API_KEY</code> no <code>.env</code>). O prompt proíbe inventar fatos; revise o resultado. Sem a chave, os currículos saem no idioma original do perfil com cabeçalhos traduzidos e um aviso.</p>
+        <p className="muted">Gera versões do resumo/descrições em outro idioma usando a API configurada no seu <code>.env</code> (Groq, OpenAI ou Anthropic). O prompt proíbe inventar fatos; revise o resultado após traduzir.</p>
         <div className="row">
           <select value={tl} onChange={(e) => setTl(e.target.value)}>{Object.entries(LANGS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
           <button disabled={busy} onClick={translate}>Traduzir</button>
