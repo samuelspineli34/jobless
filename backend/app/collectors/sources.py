@@ -1,5 +1,4 @@
-"""Coletores. Preferência por APIs/feeds públicos; o do LinkedIn usa o endpoint público 'guest'
-(sem login) e é frágil/limitado por natureza — veja o README sobre termos de uso."""
+"""Coletores aprimorados para extração massiva de vagas (incluindo LinkedIn, Gupy, Greenhouse, Lever, etc.)."""
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -12,7 +11,11 @@ from .base import Collector, CollectorError, RawJob, clean_html, client, from_ep
 
 
 def _queries(prefs: dict) -> list[str]:
-    return prefs.get("queries") or ["software engineer", "python developer"]
+    return prefs.get("queries") or [
+        "software engineer", "python developer", "backend developer", 
+        "desenvolvedor python", "desenvolvedor backend", "engenheiro de software",
+        "programador", "desenvolvedor"
+    ]
 
 
 class Greenhouse(Collector):
@@ -60,7 +63,7 @@ class Remotive(Collector):
     def fetch(self, prefs):
         out, seen = [], set()
         with client() as c:
-            for q in _queries(prefs)[:3]:
+            for q in _queries(prefs)[:4]:
                 r = c.get("https://remotive.com/api/remote-jobs", params={"search": q, "limit": 50})
                 if r.status_code != 200:
                     continue
@@ -135,91 +138,233 @@ class WeWorkRemotely(Collector):
         return out
 
 
-class Gupy(Collector):
-    """Portal público da Gupy (vagas de empresas brasileiras). API não documentada: pode mudar."""
-    name, label = "gupy", "Gupy (Brasil, API do portal)"
+class Himalayas(Collector):
+    name, label = "himalayas", "Himalayas (API pública)"
+
+    def fetch(self, prefs):
+        out = []
+        with client() as c:
+            for offset in (0, 20, 40):
+                r = c.get("https://himalayas.app/jobs/api", params={"limit": 20, "offset": offset}, timeout=20)
+                if r.status_code != 200:
+                    if offset == 0:
+                        raise CollectorError(f"Himalayas HTTP {r.status_code}")
+                    break
+                payload = r.json()
+                rows = payload.get("jobs", []) if isinstance(payload, dict) else []
+                if not rows:
+                    break
+                for j in rows:
+                    title = j.get("title") or ""
+                    company = j.get("companyName") or j.get("company_name") or j.get("company") or ""
+                    url = j.get("applicationLink") or j.get("url") or j.get("application_url") or ""
+                    ext = str(j.get("guid") or j.get("id") or url)
+                    if not title or not url or not ext:
+                        continue
+                    loc = j.get("location") or j.get("locationRestrictions") or "Remote"
+                    if isinstance(loc, list):
+                        loc = ", ".join(map(str, loc))
+                    desc = j.get("description") or j.get("excerpt") or ""
+                    posted = from_iso(j.get("pubDate") or j.get("publishedAt") or j.get("createdAt"))
+                    out.append(RawJob("himalayas", ext, title, company, str(loc), True, url, clean_html(desc), posted,
+                                      str(j.get("salary") or "")))
+                polite_sleep(0.5)
+        return out
+
+
+class Jobicy(Collector):
+    name, label = "jobicy", "Jobicy (API pública)"
 
     def fetch(self, prefs):
         out, seen = [], set()
         with client() as c:
-            # 1ª passada pede Belo Horizonte (se a API ignorar o filtro, a faixa de localização resolve depois); 2ª, geral
-            for q, extra in [(q, e) for q in _queries(prefs)[:4] for e in ({"city": "Belo Horizonte", "state": "Minas Gerais"}, {})]:
-                r = c.get("https://portal.api.gupy.io/api/job", params={"name": q, "limit": 50, "offset": 0, **extra})
+            for tag in ("software-development", "javascript", "python"):
+                r = c.get("https://jobicy.com/api/v2/remote-jobs", params={"count": 50, "tag": tag}, timeout=20)
                 if r.status_code != 200:
                     continue
-                for j in r.json().get("data", []):
-                    if j["id"] in seen:
+                payload = r.json()
+                for j in payload.get("jobs", []) if isinstance(payload, dict) else []:
+                    url = j.get("url") or ""
+                    ext = str(j.get("id") or url)
+                    if not ext or ext in seen:
                         continue
-                    seen.add(j["id"])
-                    loc = ", ".join(x for x in (j.get("city"), j.get("state"), j.get("country")) if x)
-                    out.append(RawJob("gupy", str(j["id"]), j.get("name", ""), j.get("careerPageName", ""), loc,
-                                      bool(j.get("isRemoteWork")), j.get("jobUrl", ""), clean_html(j.get("description", "")),
-                                      from_iso(j.get("publishedDate"))))
-                polite_sleep()
+                    seen.add(ext)
+                    title = j.get("jobTitle") or j.get("title") or ""
+                    if not title or not url:
+                        continue
+                    loc = j.get("jobGeo") or j.get("jobIndustry") or "Remote"
+                    out.append(RawJob("jobicy", ext, title, j.get("companyName") or "", str(loc), True, url,
+                                      clean_html(j.get("jobDescription") or j.get("description") or ""),
+                                      from_iso(j.get("pubDate") or j.get("publishedAt")), str(j.get("annualSalary") or "")))
+                polite_sleep(0.5)
         return out
 
+class Gupy(Collector):
+    name, label = "gupy", "Gupy (Belo Horizonte, MG e Brasil)"
+
+    def fetch(self, prefs):
+        out, seen = [], set()
+        # Termos focados em tecnologia e desenvolvimento
+        queries = [
+            "desenvolvedor", "programador", "software engineer", 
+            "python", "backend", "full stack", "analista de sistemas", "engenheiro de software"
+        ]
+        
+        # Variações geográficas amplas para capturar BH e região metropolitana
+        locations_filter = [
+            {"city": "Belo Horizonte", "state": "Minas Gerais"},
+            {"state": "Minas Gerais"},
+            {"city": "Contagem", "state": "Minas Gerais"},
+            {"city": "Nova Lima", "state": "Minas Gerais"},
+            {} # Geral Brasil caso o filtro restrito retorne pouco
+        ]
+
+        with client() as c:
+            for q in queries:
+                for loc_params in locations_filter:
+                    try:
+                        r = c.get("https://portal.api.gupy.io/api/job", params={"name": q, "limit": 50, "offset": 0, **loc_params}, timeout=10)
+                        if r.status_code != 200:
+                            continue
+                        data = r.json().get("data", [])
+                        for j in data:
+                            job_id = str(j.get("id"))
+                            if job_id in seen:
+                                continue
+                            seen.add(job_id)
+                            
+                            city = j.get("city") or ""
+                            state = j.get("state") or ""
+                            loc = ", ".join(x for x in (city, state, j.get("country")) if x) or "Brasil"
+                            
+                            out.append(RawJob(
+                                source="gupy",
+                                external_id=job_id,
+                                title=j.get("name", ""),
+                                company=j.get("careerPageName", ""),
+                                location=loc,
+                                remote=bool(j.get("isRemoteWork")),
+                                url=j.get("jobUrl", ""),
+                                description=clean_html(j.get("description", "")),
+                                posted_at=from_iso(j.get("publishedDate"))
+                            ))
+                    except Exception:
+                        pass
+                    polite_sleep(0.3)
+        return out
 
 def parse_linkedin_cards(html_text: str) -> list[RawJob]:
-    soup = BeautifulSoup(html_text, "html.parser")
+    """Parser tolerante às variações do HTML público de vagas do LinkedIn."""
+    soup = BeautifulSoup(html_text or "", "html.parser")
     out, seen = [], set()
-    for card in soup.select("li, div.base-card"):
-        urn = card.get("data-entity-urn") or (card.select_one("[data-entity-urn]") or {}).get("data-entity-urn", "")
-        m = re.search(r"(\d{6,})", urn or "")
-        title_el = card.select_one(".base-search-card__title")
-        if not m or not title_el or m.group(1) in seen:
+    cards = soup.select(
+        "div.base-card, li.jobs-search-results__list-item, "
+        "div.job-search-card, li[data-occludable-job-id], div.job-card-container"
+    )
+    if not cards:
+        cards = soup.select("li:has(.base-search-card__title), div:has(> .base-search-card__title)")
+    for card in cards:
+        title_el = card.select_one(
+            ".base-search-card__title, .job-card-list__title, "
+            ".job-card-container__link, h3, [class*='job-title']"
+        )
+        link = card.select_one(
+            "a.base-card__full-link, a[href*='/jobs/view/'], "
+            "a.job-card-list__title, a[href*='/jobs/']"
+        )
+        if not title_el and link:
+            title_el = link
+        if not title_el:
             continue
-        seen.add(m.group(1))
-        link = card.select_one("a.base-card__full-link")
-        t = card.select_one("time")
-        loc = (card.select_one(".job-search-card__location") or title_el).get_text(strip=True) if card.select_one(".job-search-card__location") else ""
-        out.append(RawJob("linkedin", m.group(1), title_el.get_text(strip=True),
-                          (card.select_one(".base-search-card__subtitle") or title_el).get_text(strip=True) if card.select_one(".base-search-card__subtitle") else "",
-                          loc, "remote" in loc.lower() or "remoto" in loc.lower(),
-                          (link["href"].split("?")[0] if link else f"https://www.linkedin.com/jobs/view/{m.group(1)}"),
-                          "", from_iso(t.get("datetime") + "T00:00:00") if t and t.get("datetime") else None))
+        title_text = re.sub(r"\s+", " ", title_el.get_text(" ", strip=True))
+        if not title_text or title_text.lower() in {"linkedin", "see more"}:
+            continue
+        href = (link.get("href", "") if link else "").split("?")[0]
+        match_href = re.search(r"/jobs/view/(\d+)", href)
+        urn = card.get("data-entity-urn") or card.get("data-occludable-job-id") or ""
+        if not urn:
+            urn_el = card.select_one("[data-entity-urn], [data-job-id]")
+            urn = (urn_el.get("data-entity-urn") or urn_el.get("data-job-id") or "") if urn_el else ""
+        match_urn = re.search(r"(\d{6,})", str(urn))
+        job_id = (match_href.group(1) if match_href else match_urn.group(1) if match_urn else "")
+        if not job_id:
+            continue
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        if not href:
+            href = f"https://www.linkedin.com/jobs/view/{job_id}/"
+        elif href.startswith("/"):
+            href = "https://www.linkedin.com" + href
+        loc_el = card.select_one(
+            ".job-search-card__location, .job-card-container__metadata-item, "
+            "[class*='location'], [class*='metadata']"
+        )
+        comp_el = card.select_one(
+            ".base-search-card__subtitle, .job-card-container__company-name, "
+            "[class*='company-name'], h4"
+        )
+        time_el = card.select_one("time")
+        loc = re.sub(r"\s+", " ", loc_el.get_text(" ", strip=True)) if loc_el else ""
+        comp = re.sub(r"\s+", " ", comp_el.get_text(" ", strip=True)) if comp_el else ""
+        posted = None
+        if time_el:
+            posted = from_iso(time_el.get("datetime"))
+        out.append(RawJob(
+            "linkedin", job_id, title_text, comp, loc,
+            bool(re.search(r"remote|remoto|home office|work from home", loc, re.I)),
+            href, "", posted
+        ))
     return out
 
 
 class LinkedInGuest(Collector):
-    """Busca pública de vagas do LinkedIn SEM login. Limitado a poucas páginas, com pausas.
-    Não use sua conta: scraping logado viola os termos do LinkedIn e pode banir o perfil."""
-    name, label = "linkedin", "LinkedIn (busca pública, sem login)"
+    name, label = "linkedin", "LinkedIn (Busca Pública Ampliada)"
     SEARCH = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobs/search"
     DETAIL = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{id}"
 
     def fetch(self, prefs):
-        days = int(prefs.get("max_age_days", 14))
+        days = int(prefs.get("max_age_days", 30))
         out, seen = [], set()
+        queries = _queries(prefs)[:6]
+        locations = prefs.get("linkedin_locations", ["Belo Horizonte, Minas Gerais, Brazil", "Brazil", "Remote"])[:3]
+
         with client() as c:
-            for q in _queries(prefs)[:4]:
-                for li, loc in enumerate(prefs.get("linkedin_locations", ["Brazil"])[:3]):
-                    # o 1º local (Belo Horizonte) recebe 3 páginas; os demais, só a mais recente
-                    for start in ((0, 25, 50) if li == 0 else (0,)):
+            for q in queries:
+                for loc in locations:
+                    for start in (0, 25):
                         url = f"{self.SEARCH}?keywords={quote_plus(q)}&location={quote_plus(loc)}&f_TPR=r{days * 86400}&start={start}"
-                        r = c.get(url)
-                        if r.status_code in (429, 999):
-                            raise CollectorError(f"LinkedIn limitou as requisições (HTTP {r.status_code}); tente mais tarde")
-                        if r.status_code != 200:
+                        try:
+                            r = c.get(url, timeout=15)
+                            if r.status_code in (429, 999):
+                                break
+                            if r.status_code != 200:
+                                break
+                            cards = parse_linkedin_cards(r.text)
+                            if not cards:
+                                break
+                            for j in cards:
+                                if j.external_id not in seen:
+                                    seen.add(j.external_id)
+                                    out.append(j)
+                        except Exception:
                             break
-                        cards = parse_linkedin_cards(r.text)
-                        for j in cards:
-                            if j.external_id not in seen:
-                                seen.add(j.external_id)
-                                out.append(j)
-                        if len(cards) < 20:
-                            break
-                        polite_sleep(1.5)
-                    polite_sleep(1.5)
+                        polite_sleep(1.0)
+                    polite_sleep(1.0)
         return out
 
     def enrich(self, job: RawJob) -> RawJob:
         with client() as c:
-            r = c.get(self.DETAIL.format(id=job.external_id))
-        if r.status_code == 200:
-            el = BeautifulSoup(r.text, "html.parser").select_one(".show-more-less-html__markup")
-            job.description = el.get_text("\n", strip=True) if el else ""
-        polite_sleep(1.5)
+            try:
+                r = c.get(self.DETAIL.format(id=job.external_id), timeout=15)
+                if r.status_code == 200:
+                    el = BeautifulSoup(r.text, "html.parser").select_one(".show-more-less-html__markup, .description__text")
+                    if el:
+                        job.description = el.get_text("\n", strip=True)
+            except Exception:
+                pass
+        polite_sleep(1.0)
         return job
 
 
-REGISTRY = {c.name: c for c in (Greenhouse(), Lever(), Remotive(), RemoteOK(), Arbeitnow(), WeWorkRemotely(), Gupy(), LinkedInGuest())}
+REGISTRY = {c.name: c for c in (Greenhouse(), Lever(), Remotive(), RemoteOK(), Arbeitnow(), WeWorkRemotely(), Himalayas(), Jobicy(), Gupy(), LinkedInGuest())}

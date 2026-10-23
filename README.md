@@ -1,4 +1,4 @@
-# Job Assistant
+# Jobless
 
 Assistente **local** de busca e candidatura a vagas: importa seu currículo/LinkedIn, coleta vagas de várias fontes, dá uma **nota explicável** de compatibilidade, gera currículos sob medida em **vários idiomas** (PDF + DOCX) e **prepara** as candidaturas no navegador com Playwright — com você no controle de cada envio.
 
@@ -63,7 +63,7 @@ DATABASE_URL=postgresql+psycopg://jobs:jobs@localhost:5432/jobs
 - **Envio automático ligado por padrão (chave no Painel)**, mas só para Greenhouse/Lever, com nota ≥ mínima, sem pergunta desconhecida, sem CAPTCHA, dentro do limite diário e sem candidatura recente na mesma empresa. O restante fica em *Aguardando você* (modo assistido).
 - **LinkedIn**: o perfil é lido pelo **seu export/PDF**, não por scraping. A busca de vagas usa o endpoint público sem login, com poucas páginas e pausas; ele é frágil e o LinkedIn restringe scraping nos termos de uso — **não use sua conta logada** para raspar. O **Easy Apply nunca é automatizado** (risco real de bloqueio da conta): essas vagas abrem para você aplicar manualmente.
 - **Indeed, Glassdoor e similares** não estão incluídos (bloqueio ativo/termos). Use *Vaga manual* para trazer anúncios deles ao fluxo.
-- Gupy e Remotive usam APIs de portal; Remotive pede atribuição e uso moderado. APIs não documentadas podem mudar — uma fonte quebrada **não derruba** as outras (o erro aparece no Painel).
+- Gupy, Remotive, Himalayas e Jobicy usam endpoints públicos de portal; respeite os termos e limites de cada fonte. APIs não documentadas podem mudar — uma fonte quebrada **não derruba** as outras (o erro aparece no Painel).
 - CAPTCHA e verificação de identidade **nunca são contornados**: a automação para e marca *needs_review*.
 - A API escuta só em `127.0.0.1`. Não exponha na rede. O perfil do navegador (`data/browser-profile`) guarda cookies/logins que você fizer nele — está no `.gitignore`.
 - Respeite `DAILY_APPLICATION_LIMIT`. Candidaturas em massa e genéricas funcionam mal e podem queimar sua reputação com recrutadores.
@@ -93,7 +93,7 @@ cd frontend && npm run typecheck && npm run build
 ## Limitações conhecidas
 
 - A importação de PDF depende do layout; sempre revise Experiências e datas.
-- O reconhecimento de tecnologias usa um vocabulário (`services/skills.py`) — acrescente o que faltar.
+- O reconhecimento de tecnologias usa um vocabulário (`services/skills.py`) — acrescente o que faltar. As respostas abertas agora são sugestões baseadas no perfil; perguntas pessoais/legais sem dados explícitos ficam vazias para revisão.
 - Os adaptadores de formulário são genéricos (+ detecção Greenhouse/Lever); sites com formulários muito customizados vão cair em *needs_review*.
 - As tabelas são criadas com `create_all` (sem Alembic ainda). Para evoluir o esquema em produção, adicione migrações.
 - Defaults de `greenhouse_boards`/`lever_companies` são exemplos; troque pelas empresas que te interessam.
@@ -101,7 +101,7 @@ cd frontend && npm run typecheck && npm run build
 ## Publicar no GitHub
 
 ```bash
-git init && git add . && git commit -m "feat: job assistant"
+git init && git add . && git commit -m "feat: Jobless"
 git branch -M main
 git remote add origin git@github.com:SEU_USUARIO/job-assistant.git
 git push -u origin main

@@ -2,7 +2,7 @@
 from ..config import settings
 from ..models import Setting
 
-DEFAULTS = {"paused": False, "auto_apply": True, "auto_submit": True, "daily_limit": settings.DAILY_APPLICATION_LIMIT}
+DEFAULTS = {"paused": False, "auto_apply": True, "auto_submit": False, "daily_limit": settings.DAILY_APPLICATION_LIMIT}
 
 
 def get_control(db) -> dict:

@@ -19,6 +19,21 @@ from .profile_service import ctx_for_matching, get_profile, profile_doc
 from .skills import detect_language, detect_seniority, extract_skills, split_requirements, years_required
 
 
+# Termos absolutamente obrigatórios ou proibidos para bloquear lixo de outras áreas (vendas, finanças, etc.)
+_FORBIDDEN_TITLES = re.compile(
+    r"\b(sales|account executive|customer success|marketing|recruiter|hr manager|finance|financial|"
+    r"risk|tax|legal|nurse|doctor|chef|driver|store|retail|content writer|copywriter|social media)\b", 
+    re.I
+)
+
+_REQUIRED_TECH_TERMS = re.compile(
+    r"\b(software|developer|engineer|desenvolvedor|engenheiro|programador|devops|sre|qa|tester|"
+    r"python|javascript|typescript|java|react|node|fullstack|full-stack|backend|front-end|frontend|"
+    r"architect|arquiteto|tech lead|data scientist|cientista de dados|analista de sistemas|it support|suporte ti|dev)\b",
+    re.I
+)
+
+
 def dedupe_key(company: str, title: str, location: str) -> str:
     norm = lambda s: re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()  # noqa: E731
     return hashlib.sha1(f"{norm(company)}|{norm(title)}|{norm(location.split(',')[0])}".encode()).hexdigest()
@@ -60,14 +75,16 @@ def create_job(db: Session, raw: RawJob) -> Job:
 
 
 def tier_of(job: Job) -> str:
-    return location_tier(job.location, job.title, job.remote, job.language)
+    return location_tier(job.location, job.title, job.remote, job.language, job.description)
 
 
 def run_collect(db: Session, log=print, progress=None) -> dict:
     prefs = profile_doc(db)["preferences"]
     ctx = ctx_for_matching(db)
-    keywords = [k.lower() for k in prefs.get("title_keywords", [])]
-    cutoff = now() - timedelta(days=int(prefs.get("max_age_days", 14)))
+    
+    max_days = int(prefs.get("max_age_days", 30))
+    cutoff = now() - timedelta(days=max_days)
+    
     stats = {}
     names = [n for n in prefs.get("sources", []) if n in REGISTRY]
     for i, name in enumerate(names):
@@ -78,39 +95,49 @@ def run_collect(db: Session, log=print, progress=None) -> dict:
         st = stats[name] = {"fetched": 0, "new": 0, "duplicates": 0, "filtered": 0, "error": ""}
         try:
             raws = col.fetch(prefs)
-        except Exception as e:  # uma fonte quebrada não derruba as outras
+        except Exception as e:
             st["error"] = f"{type(e).__name__}: {e}"
             log(f"[{name}] erro: {st['error']}")
             continue
         st["fetched"] = len(raws)
         enriched = 0
         for raw in raws:
-            if keywords and not any(k in raw.title.lower() for k in keywords):
+            # BLOQUEIO ABSOLUTO DE VAGAS FORA DE TI / PROGRAMAÇÃO
+            if _FORBIDDEN_TITLES.search(raw.title) and not _REQUIRED_TECH_TERMS.search(raw.title):
                 st["filtered"] += 1
                 continue
+            
+            if not _REQUIRED_TECH_TERMS.search(raw.title) and not _REQUIRED_TECH_TERMS.search(raw.description[:500] if raw.description else ""):
+                st["filtered"] += 1
+                continue
+
             if raw.posted_at and raw.posted_at < cutoff:
                 st["filtered"] += 1
                 continue
+
             existing = db.scalar(select(Job).where(Job.source == raw.source, Job.external_id == raw.external_id))
             if existing:
                 existing.last_seen, existing.active = now(), True
                 continue
+
             if db.scalar(select(Job.id).where(Job.dedupe_key == dedupe_key(raw.company, raw.title, raw.location)).limit(1)):
                 st["duplicates"] += 1
                 continue
-            if not raw.description and enriched < 40:
+
+            if not raw.description and enriched < 30:
                 try:
                     raw = col.enrich(raw)
                     enriched += 1
                 except Exception as e:
                     log(f"[{name}] não foi possível obter descrição de {raw.external_id}: {e}")
+            
             job = create_job(db, raw)
             score(db, job, ctx)
             st["new"] += 1
         db.commit()
         log(f"[{name}] {st}")
-    # expira vagas não vistas há 10+ dias
-    for j in db.scalars(select(Job).where(Job.active.is_(True), Job.last_seen < now() - timedelta(days=10))):
+
+    for j in db.scalars(select(Job).where(Job.active.is_(True), Job.last_seen < now() - timedelta(days=15))):
         j.active = False
     db.commit()
     return {"sources": stats, "new_total": sum(s["new"] for s in stats.values())}
@@ -153,7 +180,6 @@ def generate_resume(db: Session, lang: str, job: Job | None = None) -> Resume:
 
 
 def best_resume_for(db: Session, job: Job) -> Resume | None:
-    """Currículo gerado para a vaga > currículo base enviado no idioma da vaga > base em PT/EN."""
     q = select(Resume).where(Resume.job_id == job.id).order_by(Resume.id.desc())
     r = db.scalar(q)
     if r:
@@ -170,7 +196,6 @@ def _start_of_day():
 
 
 def today_by_tier(db: Session, include_queued: bool = True) -> dict:
-    """Candidaturas preparadas/enviadas hoje (e, opcionalmente, já na fila) por faixa de localização."""
     cond = Application.prepared_at >= _start_of_day()
     if include_queued:
         cond = cond | Application.status.in_(["queued", "preparing", "submitting"])
@@ -183,17 +208,15 @@ def today_by_tier(db: Session, include_queued: bool = True) -> dict:
 
 
 def shortlist(db: Session, progress=None) -> int:
-    """Vagas acima da nota mínima ganham candidatura 'shortlisted' + currículo sob medida (sem abrir navegador).
-    O lote respeita o foco 85/5/10 (BH / Brasil / remoto), com sobras indo para a próxima faixa."""
     prefs = profile_doc(db)["preferences"]
-    q = (select(Job).join(JobMatch).where(JobMatch.score >= float(prefs.get("min_score", 60)), JobMatch.eliminated.is_(False),
+    q = (select(Job).join(JobMatch).where(JobMatch.score >= float(prefs.get("min_score", 40)), JobMatch.eliminated.is_(False),
                                           Job.active.is_(True), Job.dismissed.is_(False)).order_by(JobMatch.score.desc()))
     cands = {t: [] for t in TIERS}
     for job in db.scalars(q):
         t = tier_of(job)
         if t in cands and not db.scalar(select(Application.id).where(Application.job_id == job.id)):
             cands[t].append(job)
-    take = allocate({t: len(v) for t, v in cands.items()}, prefs.get("focus", {"bh": 85, "brazil": 5, "remote": 10}),
+    take = allocate({t: len(v) for t, v in cands.items()}, prefs.get("focus", {"bh": 30, "brazil": 50, "remote": 20}),
                     int(prefs.get("shortlist_batch", 30)))
     chosen = [j for t in TIERS for j in cands[t][:take[t]]]
     for i, job in enumerate(chosen):

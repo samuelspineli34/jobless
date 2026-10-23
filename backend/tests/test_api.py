@@ -40,7 +40,7 @@ def test_end_to_end_flow():
         assert c.post("/api/control/pause").json()["paused"] is True
         assert c.post("/api/control/resume").json()["paused"] is False
         st = c.get("/api/stats").json()
-        assert st["jobs_total"] == 1 and st["control"]["auto_submit"] is True and st["control"]["auto_apply"] is True
+        assert st["jobs_total"] == 1 and st["control"]["auto_submit"] is False and st["control"]["auto_apply"] is True
         assert [q["tier"] for q in st["quota"]] == ["bh", "brazil", "remote"]
         assert sum(q["target"] for q in st["quota"]) == st["daily_limit"]
         assert c.post("/api/control/settings", json={"daily_limit": 40}).json()["daily_limit"] == 40

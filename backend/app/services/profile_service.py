@@ -1,4 +1,4 @@
-"""Perfil: leitura/escrita como um único documento + mesclagem de importações."""
+"""Perfil: termos de busca ampliados para capturar programadores e desenvolvedores em geral."""
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -7,30 +7,39 @@ from .skills import normalize_skill
 
 DEFAULT_PREFS = {
     "prefs_version": 2,
-    "focus": {"bh": 85, "brazil": 5, "remote": 10},   # % do esforço: Belo Horizonte / Brasil / remoto
+    "focus": {"bh": 30, "brazil": 50, "remote": 20},
     "content_language": "pt",
-    "titles": ["Software Engineer", "Full-Stack Developer", "Backend Engineer", "Desenvolvedor"],
-    "queries": ["software engineer", "python developer", "backend developer", "full stack developer", "desenvolvedor python"],
-    "title_keywords": ["developer", "engineer", "desenvolvedor", "engenheiro", "programador", "software", "backend", "back-end",
-                       "full stack", "fullstack", "full-stack", "python", "typescript"],
-    "seniority": ["junior", "mid"],
-    "locations": ["belo horizonte", "brazil", "brasil", "remote"],
+    "titles": ["Software Engineer", "Full-Stack Developer", "Backend Engineer", "Desenvolvedor", "Programador", "Dev"],
+    "queries": [
+        "junior software engineer", "junior frontend developer", "junior backend developer",
+        "frontend developer", "front-end developer", "react developer", "typescript developer",
+        "full stack developer", "software engineer", "python developer", "backend developer",
+        "desenvolvedor frontend", "desenvolvedor front end", "desenvolvedor react",
+        "desenvolvedor typescript", "desenvolvedor júnior", "desenvolvedor junior",
+        "desenvolvedor", "programador", "desenvolvedor python", "desenvolvedor backend",
+        "engenheiro de software", "fullstack", "dev python", "back end developer"
+    ],
+    "title_keywords": [
+        "developer", "engineer", "desenvolvedor", "engenheiro", "programador", "software", 
+        "backend", "back-end", "full stack", "fullstack", "full-stack", "python", "typescript", 
+        "ruby", "node", "javascript", "dev", "programacao", "programação"
+    ],
+    "seniority": ["junior", "mid", "senior"],
+    "locations": ["belo horizonte", "brazil", "brasil", "remote", "remoto", "sao paulo", "rio de janeiro"],
     "accept_remote_global": True,
     "hard_location": False,
     "exclude_keywords": [],
     "blocked_companies": [],
-    "max_age_days": 14,
-    "min_score": 60,
-    "sources": ["greenhouse", "lever", "remotive", "remoteok", "arbeitnow", "weworkremotely", "gupy", "linkedin"],
-    "greenhouse_boards": ["gitlab", "cloudflare", "datadog", "stripe"],
-    "lever_companies": ["spotify", "nubank"],
-    "linkedin_locations": ["Belo Horizonte, Minas Gerais, Brazil", "Brazil", "Remote"],
-    "weights": {"technical": 40, "experience": 25, "seniority": 15, "location": 10, "language": 10},
+    "max_age_days": 30,
+    "min_score": 40,  # Nota flexibilizada para capturar mais oportunidades compatíveis
+    "sources": ["greenhouse", "lever", "remotive", "remoteok", "arbeitnow", "weworkremotely", "himalayas", "jobicy", "gupy", "linkedin"],
+    "greenhouse_boards": ["gitlab", "cloudflare", "datadog", "stripe", "nubank", "mercadolivre"],
+    "lever_companies": ["spotify", "nubank", "transferwise"],
+    "linkedin_locations": ["Brazil", "Belo Horizonte, Minas Gerais, Brazil", "Remote"],
+    "weights": {"technical": 30, "experience": 25, "seniority": 15, "location": 20, "language": 10},
 }
 
-
 def upgraded_prefs(saved: dict | None) -> dict:
-    """Mescla com os padrões; preferências salvas antes do foco por região recebem os novos padrões uma vez."""
     saved = dict(saved or {})
     if saved.get("prefs_version", 1) < 2:
         for k in ("focus", "locations", "linkedin_locations"):
@@ -90,7 +99,6 @@ def save_profile_doc(db: Session, doc: dict) -> None:
 
 
 def merge_import(db: Session, parsed: dict, replace: bool = False) -> dict:
-    """Mescla dados importados sem apagar o que já existe (a menos que replace=True)."""
     p = get_profile(db)
     counts = {"experiences": 0, "education": 0, "skills": 0}
     for k in ("full_name", "email", "phone", "location", "headline", "summary"):

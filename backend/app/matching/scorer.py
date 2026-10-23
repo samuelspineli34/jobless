@@ -5,9 +5,9 @@ from datetime import date
 from ..services.skills import LEVELS, display, level_index
 from .tiers import TIER_LABEL, location_tier
 
-DEFAULT_WEIGHTS = {"technical": 40, "experience": 25, "seniority": 15, "location": 10, "language": 10}
+DEFAULT_WEIGHTS = {"technical": 35, "experience": 25, "seniority": 15, "location": 15, "language": 10}
 _RESTRICTED = re.compile(r"(us only|usa only|u\.s\. only|united states only|must (?:be )?(?:located|reside) in the (?:us|u\.s\.|united states)|"
-                         r"eu only|uk only|work authorization|authorized to work in the (?:us|united states))", re.I)
+                         r"uk only|work authorization|authorized to work in the (?:us|united states))", re.I)
 _STOPWORDS = {"the", "and", "de", "da", "do", "para", "senior", "junior", "pleno", "sr", "jr", "i", "ii", "iii", "remote", "remoto"}
 
 
@@ -66,7 +66,7 @@ def score_job(job: dict, ctx: dict) -> dict:
     enote = f"título {title_sim:.0%} parecido; {ctx['years']:.1f} anos de experiência" + (f" para {yreq} exigidos" if yreq else "")
 
     # 3) senioridade
-    jl, preferred = job.get("seniority") or "", [x for x in prefs.get("seniority", ["junior", "mid"]) if x in LEVELS]
+    jl, preferred = job.get("seniority") or "", [x for x in prefs.get("seniority", ["junior", "mid", "senior"]) if x in LEVELS]
     if not jl:
         seniority, snote = 0.7, "senioridade não informada"
     elif jl in preferred or not preferred:
@@ -77,29 +77,48 @@ def score_job(job: dict, ctx: dict) -> dict:
 
     # 4) localização / regime — faixas: Belo Horizonte > Brasil > remoto
     where = f"{job.get('location', '')} {'remote' if job.get('remote') else ''}".lower()
-    tier = location_tier(job.get("location", ""), job["title"], bool(job.get("remote")), job.get("language", ""))
+    
+    # Chamada corrigida usando o import relativo correto (.tiers)
+    tier = location_tier(job.get("location", ""), job["title"], bool(job.get("remote")), job.get("language", ""), job.get("description", ""))
+    
     restricted = bool(_RESTRICTED.search(job.get("description", "")[:3000] + " " + where))
     if tier == "bh":
         location, lnote = 1.0, "Belo Horizonte / Grande BH"
     elif tier == "brazil":
-        location, lnote = 0.75, "Brasil"
+        location, lnote = 0.9, "Brasil"
     elif tier == "remote" and restricted:
-        location, lnote = 0.15, "remoto, mas com restrição de país/autorização de trabalho"
+        location, lnote = 0.2, "remoto, mas com restrição de país/autorização de trabalho"
     elif tier == "remote" and prefs.get("accept_remote_global", True):
-        location, lnote = 0.7, "remoto sem restrição aparente de país"
+        location, lnote = 0.85, "remoto global sem restrição aparente de país"
     elif tier == "remote":
-        location, lnote = 0.2, "remoto internacional (não desejado)"
+        location, lnote = 0.3, "remoto internacional restrito"
     else:
-        location, lnote = 0.1, f"fora das localizações desejadas ({job.get('location') or 'n/d'})"
+        location, lnote = 0.0, f"fora das localizações desejadas ({job.get('location') or 'n/d'})"
 
     # 5) idioma
-    language = 1.0 if job.get("language", "en") in ctx["languages"] else 0.2
+    language = 1.0 if job.get("language", "en") in ctx["languages"] else 0.3
     inote = f"vaga em {job.get('language', 'en')}" + ("" if language == 1.0 else " (idioma não listado no perfil)")
 
     parts = {"technical": technical, "experience": experience, "seniority": seniority, "location": location, "language": language}
     score = round(100 * sum(w[k] * v for k, v in parts.items()) / sum(w[k] for k in parts), 1)
 
-    # eliminatórios, tratados à parte
+    # eliminatórios
+    blob_title_desc = f"{job['title']} {job.get('description', '')[:500]}".lower()
+    is_tech = bool(re.search(
+        r"(software|developer|engineer|desenvolvedor|engenheiro|programador|devops|sre|qa|"
+        r"python|javascript|typescript|java|react|node|fullstack|backend|frontend|arquiteto|tech lead|dados|it)",
+        blob_title_desc
+    ))
+    is_commercial_noise = bool(re.search(r"\b(sales engineer|account executive|risk analyst|financial analyst)\b", job["title"].lower()))
+
+    if not is_tech or is_commercial_noise:
+        return {
+            "score": 0, "eliminated": True, "matched": [], "gaps": [], 
+            "breakdown": {"technical": 0, "experience": 0, "seniority": 0, "location": 0, "language": 0},
+            "explanation": "ELIMINADA: Vaga fora do escopo de programação, desenvolvimento ou TI.",
+            "tier": "other"
+        }
+        
     eliminated = []
     blob = f"{job['title']} {job.get('description', '')}".lower()
     for kw in prefs.get("exclude_keywords", []):
@@ -108,7 +127,7 @@ def score_job(job: dict, ctx: dict) -> dict:
     if job.get("company", "").lower() in [c.lower() for c in prefs.get("blocked_companies", [])]:
         eliminated.append("empresa bloqueada")
     if prefs.get("hard_location") and tier == "other":
-        eliminated.append("localização incompatível")
+        eliminated.append("localização incompatível (fora do Brasil/BH/Remoto)")
 
     explanation = (f"Técnica: {tnote}. Experiência: {enote}. Senioridade: {snote}. "
                    f"Local: {lnote}. Idioma: {inote}." + (f" ELIMINADA: {'; '.join(eliminated)}." if eliminated else ""))

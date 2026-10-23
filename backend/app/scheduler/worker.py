@@ -1,6 +1,4 @@
-"""Fila persistente (tabela automation_runs) + worker em thread + agendador periódico.
-Estados: pending -> running -> completed | needs_review | failed. Reiniciar o PC não perde nada:
-runs 'running' voltam para 'pending' na inicialização (e o filler nunca reenvia uma candidatura 'submitting')."""
+"""Fila persistente + worker em thread + agendador periódico otimizado para automação total."""
 import threading
 import traceback
 
@@ -29,7 +27,7 @@ def set_paused(db, paused: bool) -> None:
 
 
 def enqueue(db, kind: str, payload: dict | None = None) -> AutomationRun:
-    if kind in ("collect", "auto_apply"):   # nunca duas coletas/rodadas automáticas ao mesmo tempo
+    if kind in ("collect", "auto_apply"):
         dup = db.scalar(select(AutomationRun).where(AutomationRun.kind == kind, AutomationRun.status.in_(["pending", "running"])))
         if dup:
             return dup
@@ -40,23 +38,30 @@ def enqueue(db, kind: str, payload: dict | None = None) -> AutomationRun:
 
 
 def auto_apply(db) -> int:
-    """Piloto automático: escolhe candidaturas 'shortlisted' das plataformas confiáveis (Greenhouse/Lever) respeitando
-    o limite diário e o foco BH/Brasil/remoto, e as enfileira. As demais ficam 'Aguardando você'."""
+    """Piloto automático completo: seleciona vagas elegíveis, gera currículo sob medida e enfileira para envio."""
     from ..matching.tiers import TIERS, allocate
     from ..services import jobs_service as js
     from ..services.profile_service import profile_doc
+
     ctl = get_control(db)
-    if not ctl["auto_apply"] or ctl["paused"]:
+    if ctl["paused"]:
         return 0
+
     prefs = profile_doc(db)["preferences"]
-    min_score = float(prefs.get("min_score", 60))
+    min_score = float(prefs.get("min_score", 50))
+    
+    # Executa shortlist automático para transformar novas vagas em candidaturas 'shortlisted'
+    js.shortlist(db)
+
     by_tier = {t: [] for t in TIERS}
     for a in db.scalars(select(Application).where(Application.status == "shortlisted")).unique():
         j = a.job
-        if (filler.is_auto_lane(j.url) and j.active and not j.dismissed and j.match and not j.match.eliminated
+        if (j.active and not j.dismissed and j.match and not j.match.eliminated
                 and j.match.score >= min_score and js.tier_of(j) in by_tier):
             by_tier[js.tier_of(j)].append(a)
-    take = allocate({t: len(v) for t, v in by_tier.items()}, prefs.get("focus", {}), int(ctl["daily_limit"]), js.today_by_tier(db))
+
+    take = allocate({t: len(v) for t, v in by_tier.items()}, prefs.get("focus", {"bh": 40, "brazil": 40, "remote": 20}),
+                    int(ctl["daily_limit"]), js.today_by_tier(db))
     n = 0
     for t in TIERS:
         for a in sorted(by_tier[t], key=lambda x: -x.job.match.score)[:take[t]]:
@@ -70,7 +75,7 @@ def auto_apply(db) -> int:
 def _handle(db, run: AutomationRun) -> dict:
     from ..services import jobs_service as js
     from ..models import Job
-    def prog(d):   # progresso ao vivo para as barras do Painel
+    def prog(d):
         run.detail = d
         db.commit()
 
@@ -95,7 +100,7 @@ def _handle(db, run: AutomationRun) -> dict:
         res = filler.prepare(db, int(run.payload["application_id"]), log=lines.append, auto=bool(run.payload.get("auto")))
         run.log = "\n".join(lines)
         return res
-    raise ValueError(f"tipo desconhecido: {run.kind}")
+    raise ValueError(f"Tipo desconhecido: {run.kind}")
 
 
 def _loop():
@@ -105,9 +110,7 @@ def _loop():
             if is_paused(db):
                 q = q.where(AutomationRun.kind.notin_(AUTOMATION_KINDS))
             run = db.scalar(q)
-            if not run:
-                pass
-            else:
+            if run:
                 run.status, run.started_at = "running", now()
                 db.commit()
                 try:
@@ -131,9 +134,9 @@ def start():
     global _thread, _scheduler
     with SessionLocal() as db:
         for r in db.scalars(select(AutomationRun).where(AutomationRun.status == "running")):
-            r.status = "pending"   # retoma
+            r.status = "pending"
         db.commit()
-    with SessionLocal() as db:   # primeira abertura do dia: coleta sozinho se já há perfil e faz tempo desde a última
+    with SessionLocal() as db:
         from datetime import timedelta
         from ..models import Experience
         last = db.scalar(select(AutomationRun.created_at).where(AutomationRun.kind == "collect").order_by(AutomationRun.id.desc()).limit(1))
@@ -157,7 +160,7 @@ def start():
             with SessionLocal() as db:
                 enqueue(db, "auto_apply")
 
-        _scheduler.add_job(tick_auto, "interval", hours=1, id="auto_apply")
+        _scheduler.add_job(tick_auto, "interval", minutes=30, id="auto_apply")
         _scheduler.start()
 
 

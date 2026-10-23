@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
-title Job Assistant
+title Jobless
 
 where python >nul 2>nul
 if errorlevel 1 (
@@ -52,7 +52,7 @@ if not exist "frontend\dist\index.html" (
 
 echo.
 echo ============================================================
-echo   Job Assistant rodando em http://127.0.0.1:8000
+echo   Jobless rodando em http://127.0.0.1:8000
 echo   O navegador vai abrir sozinho. Para ENCERRAR, feche esta janela.
 echo ============================================================
 echo.
@@ -60,7 +60,7 @@ start "" /min cmd /c "timeout /t 4 >nul & start http://127.0.0.1:8000"
 cd backend
 "..\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 echo.
-echo O servidor parou. Se apareceu erro de porta em uso, feche outras janelas do Job Assistant.
+echo O servidor parou. Se apareceu erro de porta em uso, feche outras janelas do Jobless.
 pause
 exit /b 0
 

@@ -1,32 +1,46 @@
-"""Faixas de localização (foco da busca) e distribuição de cotas.
-bh = Belo Horizonte e Grande BH · brazil = resto do Brasil · remote = remoto fora do Brasil."""
+"""Faixas de localização com reconhecimento robusto e ampliado para Belo Horizonte e Minas Gerais."""
 import re
 
-TIERS = ("bh", "brazil", "remote")           # também é a ordem de prioridade
+TIERS = ("bh", "brazil", "remote")
 TIER_LABEL = {"bh": "Belo Horizonte", "brazil": "Brasil", "remote": "Remoto", "other": "Outro"}
-DEFAULT_FOCUS = {"bh": 85, "brazil": 5, "remote": 10}
+DEFAULT_FOCUS = {"bh": 40, "brazil": 40, "remote": 20}
 
-_BH = re.compile(r"belo horizonte|\bbh\b|contagem|betim|nova lima|sabar[áa]|santa luzia|lagoa santa|vespasiano|ribeir[ãa]o das neves", re.I)
-_BR = re.compile(r"\b(brazil|brasil)\b|minas gerais|s[ãa]o paulo|rio de janeiro|curitiba|porto alegre|florian[óo]polis|recife|"
-                 r"fortaleza|salvador|bras[íi]lia|campinas|goi[âa]nia|vit[óo]ria|uberl[âa]ndia|juiz de fora", re.I)
-_UF = re.compile(r"(?:,|\s-|\s)\s*(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\s*$")
-_GENERIC_REMOTE = re.compile(r"^\W*(remote|remoto|anywhere|worldwide|home ?office|latam|latin america|global)?\W*$", re.I)
+# Padrões amplos cobrindo Belo Horizonte, MG e Grande BH
+_BH = re.compile(
+    r"belo horizonte|\bbh\b|minas gerais|\bmg\b|contagem|betim|nova lima|"
+    r"sabar[áa]|santa luzia|lagoa santa|vespasiano|ribeir[ãa]o das neves|pará de minas|sete lagoas", 
+    re.I
+)
+_BR = re.compile(r"\b(brazil|brasil)\b|s[ãa]o paulo|rio de janeiro|curitiba|porto alegre|florian[óo]polis|recife|salvador|bras[íi]lia", re.I)
+_UF = re.compile(r"(?:,|\s-|\s)\s*(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\b", re.I)
+_REMOTE = re.compile(r"remote|remoto|anywhere|worldwide|home ?office|latam|latin america|global", re.I)
+_RESTRICTED = re.compile(r"(us only|usa only|u\.s\. only|united states only|uk only|work authorization|authorized to work in the (?:us|united states))", re.I)
 
 
-def location_tier(location: str = "", title: str = "", remote: bool = False, language: str = "") -> str:
+def location_tier(location: str = "", title: str = "", remote: bool = False, language: str = "", description: str = "") -> str:
     loc = (location or "").strip()
-    if _BH.search(loc) or _BH.search(title or ""):
+    blob = f"{loc} {title} {description}".lower()
+
+    if _RESTRICTED.search(blob) and not ("brazil" in blob or "brasil" in blob or "belo horizonte" in blob or "mg" in blob):
+        return "other"
+
+    # Prioridade absoluta para Belo Horizonte e Grande BH / MG
+    if _BH.search(loc) or _BH.search(title or "") or _BH.search(description[:500] if description else ""):
         return "bh"
-    if _BR.search(loc) or _UF.search(loc):
+    
+    if _BR.search(loc) or _UF.search(loc) or "brasil" in loc.lower() or "brazil" in loc.lower():
         return "brazil"
-    if remote:
-        # vaga remota em português e sem país estrangeiro explícito: provavelmente brasileira
-        return "brazil" if language == "pt" and _GENERIC_REMOTE.match(loc) else "remote"
+        
+    if remote and (language or "").lower().startswith("pt") and not loc:
+        return "brazil"
+
+    if remote or _REMOTE.search(loc) or _REMOTE.search(title):
+        return "remote"
+    
     return "other"
 
 
 def targets(total: int, focus: dict) -> dict[str, int]:
-    """Cota inteira por faixa (maior resto): total=20, 85/5/10 -> bh 17, brazil 1, remote 2."""
     s = sum(max(0, focus.get(t, 0)) for t in TIERS) or 1
     shares = {t: total * max(0, focus.get(t, 0)) / s for t in TIERS}
     out = {t: int(shares[t]) for t in TIERS}
@@ -37,8 +51,6 @@ def targets(total: int, focus: dict) -> dict[str, int]:
 
 
 def allocate(available: dict, focus: dict, limit: int, done: dict | None = None) -> dict[str, int]:
-    """Quantas vagas pegar de cada faixa. Respeita a cota do foco (descontando o que já foi feito hoje);
-    a cota que sobra numa faixa sem vagas suficientes é redistribuída na ordem bh > brazil > remote."""
     done = done or {}
     remaining = max(0, limit - sum(done.get(t, 0) for t in TIERS))
     quota = {t: max(0, tg - done.get(t, 0)) for t, tg in targets(limit, focus).items()}

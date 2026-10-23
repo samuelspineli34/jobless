@@ -7,7 +7,7 @@ const BARS: Record<string, string> = { technical: 'Técnica', experience: 'Exper
 export default function Jobs({ notify, go }: any) {
   const [items, setItems] = useState<any[]>([])
   const [total, setTotal] = useState(0)
-  const [f, setF] = useState({ q: '', source: '', tier: '', min_score: 60, sort: 'score' })
+  const [f, setF] = useState({ q: '', source: '', tier: '', min_score: 40, sort: 'score' })
   const [sel, setSel] = useState<any>(null)
   const [lang, setLang] = useState('pt')
   const [adding, setAdding] = useState(false)
@@ -17,7 +17,7 @@ export default function Jobs({ notify, go }: any) {
     const p = new URLSearchParams({ q: f.q, source: f.source, tier: f.tier, min_score: String(f.min_score), sort: f.sort })
     api('/jobs?' + p).then((r) => { setItems(r.items); setTotal(r.total) }).catch((e) => notify(e.message, true))
   }
-  useEffect(() => { load() }, [f.source, f.tier, f.min_score, f.sort])
+  useEffect(() => { const t = setTimeout(load, f.q ? 350 : 0); return () => clearTimeout(t) }, [f.q, f.source, f.tier, f.min_score, f.sort])
   const open = (id: number) => api('/jobs/' + id).then((j) => { setSel(j); if (['pt', 'en', 'es', 'fr', 'de', 'it'].includes(j.language)) setLang(j.language) })
   const run = async (fn: () => Promise<any>, ok: string) => { try { await fn(); notify(ok) } catch (e: any) { notify(e.message, true) } }
 
@@ -34,7 +34,7 @@ export default function Jobs({ notify, go }: any) {
           <input placeholder="Buscar título/empresa" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && load()} />
           <select value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })}>
             <option value="">Todas as fontes</option>
-            {['gupy', 'linkedin', 'greenhouse', 'lever', 'remotive', 'remoteok', 'arbeitnow', 'weworkremotely', 'manual'].map((s) => <option key={s}>{s}</option>)}
+            {['gupy', 'linkedin', 'greenhouse', 'lever', 'remotive', 'remoteok', 'arbeitnow', 'weworkremotely', 'himalayas', 'jobicy', 'manual'].map((s) => <option key={s}>{s}</option>)}
           </select>
           <select value={f.tier} onChange={(e) => setF({ ...f, tier: e.target.value })}>
             <option value="">Todas as regiões</option>

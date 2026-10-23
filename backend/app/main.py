@@ -19,7 +19,7 @@ async def lifespan(_: FastAPI):
     worker.stop()
 
 
-app = FastAPI(title="Job Assistant", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Jobless", version="1.0.0", lifespan=lifespan)
 # Só aceita o frontend local (Vite em dev). A API não deve ficar exposta fora da sua máquina.
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["*"], allow_headers=["*"])
